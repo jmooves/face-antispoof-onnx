@@ -336,7 +336,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", type=str, default=None)
+    parser.add_argument("--image", type=str, default=None, help="Path to image file (if not provided, uses camera)")
+    parser.add_argument("--camera", type=int, default=0, help="Camera index to use (default: 0)")
     parser.add_argument("--model_img_size", type=int, default=128)
     parser.add_argument("--bbox_expansion_factor", type=float, default=1.5)
     parser.add_argument("--threshold", type=float, default=0.5)
@@ -356,8 +357,15 @@ if __name__ == "__main__":
         exit(1)
 
     if args.image is None:
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(args.camera)
         if not cap.isOpened():
+            print(f"Error: Could not open camera {args.camera}")
+            print("Available cameras:")
+            for i in range(10):
+                test_cap = cv2.VideoCapture(i)
+                if test_cap.isOpened():
+                    print(f"  Camera {i}: Available")
+                    test_cap.release()
             exit(1)
 
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
