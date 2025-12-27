@@ -11,3 +11,4 @@ onnxsim
 onnxruntime
 tqdm
 tensorboardX
+py-cpuinfo

@@ -3,6 +3,18 @@ import numpy as np
 import onnxruntime as ort
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
+import time
+import platform
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+try:
+    import cpuinfo
+    HAS_CPUINFO = True
+except ImportError:
+    HAS_CPUINFO = False
 
 MODELS_DIR = Path(__file__).parent / "models"
 DETECTOR_MODEL = MODELS_DIR / "detector.onnx"
@@ -134,6 +146,67 @@ def infer(
         return []
 
 
+def get_cpu_info() -> str:
+    cpu_name = None
+    cpu_freq_mhz = None
+    cpu_cores = None
+    cpu_threads = None
+    
+    if HAS_CPUINFO:
+        try:
+            info = cpuinfo.get_cpu_info()
+            cpu_name = info.get('brand_raw') or info.get('brand') or info.get('model name')
+            if cpu_name:
+                cpu_name = cpu_name.strip()
+        except Exception:
+            pass
+    
+    if HAS_PSUTIL:
+        try:
+            cpu_freq = psutil.cpu_freq()
+            cpu_cores = psutil.cpu_count(logical=False)
+            cpu_threads = psutil.cpu_count(logical=True)
+            if cpu_freq and cpu_freq.current:
+                cpu_freq_mhz = cpu_freq.current
+        except Exception:
+            pass
+    
+    if not cpu_name:
+        cpu_name = platform.processor() or "Unknown CPU"
+    
+    parts = []
+    if cpu_name:
+        parts.append(cpu_name)
+    
+    if cpu_cores and cpu_threads:
+        if cpu_cores == cpu_threads:
+            parts.append(f"{cpu_cores} cores")
+        else:
+            parts.append(f"{cpu_cores}C/{cpu_threads}T")
+    
+    if cpu_freq_mhz:
+        if cpu_freq_mhz >= 1000:
+            parts.append(f"{cpu_freq_mhz/1000:.2f} GHz")
+        else:
+            parts.append(f"{cpu_freq_mhz:.0f} MHz")
+    
+    return " | ".join(parts) if parts else "Unknown CPU"
+
+
+def get_execution_provider_name(session: ort.InferenceSession) -> str:
+    try:
+        providers = session.get_providers()
+        if "CUDAExecutionProvider" in providers:
+            return "CUDA"
+        elif "CPUExecutionProvider" in providers:
+            return "CPU"
+        elif providers:
+            return providers[0].replace("ExecutionProvider", "")
+        return "Unknown"
+    except Exception:
+        return "Unknown"
+
+
 def load_model(model_path: str) -> Tuple[Optional[ort.InferenceSession], Optional[str]]:
     if not Path(model_path).exists():
         return None, None
@@ -256,7 +329,26 @@ if __name__ == "__main__":
         if not cap.isOpened():
             exit(1)
 
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+
+        window_name = "Liveness Detection"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 640, 480)
+
+        show_info = True
+        fps_history = []
+
+        cpu_info = get_cpu_info()
+        provider_name = get_execution_provider_name(liveness_session)
+
+        print("Controls:")
+        print("  'q' - Quit")
+        print("  'i' - Toggle info display")
+
         while True:
+            frame_start = time.time()
             ret, frame = cap.read()
             if not ret:
                 break
@@ -304,9 +396,59 @@ if __name__ == "__main__":
                             2,
                         )
 
-            cv2.imshow("Liveness Detection", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            frame_time = time.time() - frame_start
+            current_fps = 1.0 / frame_time if frame_time > 0 else 0
+            fps_history.append(current_fps)
+
+            if len(fps_history) > 30:
+                fps_history.pop(0)
+
+            display_width = 640
+            display_height = 480
+            display_frame = cv2.resize(frame, (display_width, display_height), interpolation=cv2.INTER_AREA)
+
+            if show_info:
+                avg_fps = sum(fps_history) / len(fps_history) if fps_history else 0
+
+                info_y = 25
+                line_height = 20
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                thickness = 1
+                color_white = (255, 255, 255)
+                color_cyan = (255, 255, 0)
+
+                cv2.putText(display_frame, f"FPS: {avg_fps:.1f}", (5, info_y), font, font_scale, color_cyan, thickness)
+                info_y += line_height
+                
+                cpu_lines = []
+                max_chars_per_line = 55
+                words = cpu_info.split()
+                current_line = ""
+                for word in words:
+                    if len(current_line + " " + word) <= max_chars_per_line:
+                        current_line += (" " + word if current_line else word)
+                    else:
+                        if current_line:
+                            cpu_lines.append(current_line)
+                        current_line = word
+                if current_line:
+                    cpu_lines.append(current_line)
+                
+                for i, cpu_line in enumerate(cpu_lines[:2]):
+                    cv2.putText(display_frame, f"CPU: {cpu_line}" if i == 0 else cpu_line, (5, info_y), font, font_scale, color_white, thickness)
+                    info_y += line_height
+                info_y += line_height
+                cv2.putText(display_frame, f"Provider: {provider_name}", (5, info_y), font, font_scale, color_white, thickness)
+                info_y += line_height
+                cv2.putText(display_frame, "Press 'i' to toggle", (5, info_y), font, 0.4, (200, 200, 200), 1)
+
+            cv2.imshow(window_name, display_frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
+            elif key == ord("i"):
+                show_info = not show_info
 
         cap.release()
         cv2.destroyAllWindows()
