@@ -112,7 +112,12 @@ pip install -r requirements.txt
 
 **Webcam:**
 ```bash
-python demo.py --camera
+python demo.py
+```
+or
+
+```bash
+python demo.py --camera [index]
 ```
 
 **Single image:**
